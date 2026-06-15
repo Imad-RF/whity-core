@@ -82,14 +82,22 @@ async function proxyRequest(request: Request, method: string): Promise<Response>
 
     const responseHeaders = new Headers(response.headers);
     responseHeaders.delete('transfer-encoding');
-    responseHeaders.delete('content-encoding'); // Remove since we've already decompressed via response.text()
-    responseHeaders.delete('content-length'); // Recalculate based on decompressed text length
+    // The proxy->backend leg is forced to identity (see Accept-Encoding above),
+    // so the body we forward is the raw, uncompressed bytes; drop the hop's
+    // encoding/length headers and let the runtime recompute Content-Length.
+    responseHeaders.delete('content-encoding');
+    responseHeaders.delete('content-length');
 
     // A null-body status (e.g. 204 No Content from an OU/role delete) must be
     // forwarded WITHOUT a body, or `new Response(...)` throws and the proxy
     // surfaces a 500. Read/forward the body only for statuses that allow one.
+    //
+    // Forward the body as raw BYTES (arrayBuffer), never response.text():
+    // text() decodes as UTF-8 and corrupts any binary response (e.g. a
+    // generated .docx download), which Word then refuses to open. arrayBuffer
+    // round-trips text and binary identically.
     const isNullBody = NULL_BODY_STATUSES.has(response.status);
-    const responseBody = isNullBody ? null : await response.text();
+    const responseBody = isNullBody ? null : await response.arrayBuffer();
 
     const result = new Response(responseBody, {
       status: response.status,
